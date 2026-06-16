@@ -46,6 +46,7 @@ jobs:
             make \
             gcc \
             libseccomp-devel \
+            libselinux-devel \
             gpgme-devel \
             device-mapper-devel \
             pkg-config \
@@ -76,7 +77,7 @@ jobs:
           GOOS: linux
           GOARCH: amd64
           CGO_ENABLED: 1
-          BUILDTAGS: "exclude_graphdriver_btrfs"
+          BUILDTAGS: "seccomp selinux systemd exclude_graphdriver_btrfs"
         run: |
           make podman
 

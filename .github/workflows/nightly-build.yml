@@ -53,7 +53,7 @@ jobs:
             systemd-devel
 
       - name: Checkout Podman main
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: podman-container-tools/podman
           ref: main
@@ -98,7 +98,7 @@ jobs:
           sha256sum podman-rhel${{ matrix.rhel_version }}-amd64.tar.gz > podman-rhel${{ matrix.rhel_version }}-amd64.tar.gz.sha256
 
       - name: Upload binaries to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.prepare.outputs.release_tag }}
           name: Nightly Build ${{ needs.prepare.outputs.build_datetime }}
@@ -115,7 +115,7 @@ jobs:
       contents: write
     steps:
       - name: Update release description
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.prepare.outputs.release_tag }}
           name: Nightly Build ${{ needs.prepare.outputs.build_datetime }}

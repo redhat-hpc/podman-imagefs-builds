@@ -1,0 +1,107 @@
+name: Nightly Podman Build with ImageFS Plugin
+
+on:
+  schedule:
+    # Run at 2:17 AM UTC every night
+    - cron: '17 2 * * *'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            libseccomp-dev \
+            libgpgme-dev \
+            libdevmapper-dev \
+            libbtrfs-dev \
+            pkg-config
+
+      - name: Checkout Podman main
+        uses: actions/checkout@v4
+        with:
+          repository: podman-container-tools/podman
+          ref: main
+          path: podman
+
+      - name: Override container-libs with imagefs-plugin-5.8 branch
+        working-directory: podman
+        run: |
+          go mod edit -replace github.com/containers/storage=github.com/redhat-hpc/container-libs@imagefs-plugin-5.8
+          go mod tidy
+
+      - name: Build Podman for linux/amd64
+        working-directory: podman
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: 1
+        run: |
+          make podman
+
+      - name: Get version info
+        id: version
+        working-directory: podman
+        run: |
+          echo "podman_version=$(./bin/podman --version)" >> $GITHUB_OUTPUT
+          echo "build_date=$(date -u +%Y%m%d)" >> $GITHUB_OUTPUT
+          echo "build_datetime=$(date -u +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
+          echo "release_tag=nightly-$(date -u +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
+
+      - name: Package binary
+        working-directory: podman
+        run: |
+          mkdir -p release
+          cp bin/podman release/podman-linux-amd64
+          chmod +x release/podman-linux-amd64
+          cd release
+          tar -czf podman-linux-amd64.tar.gz podman-linux-amd64
+          sha256sum podman-linux-amd64.tar.gz > podman-linux-amd64.tar.gz.sha256
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.release_tag }}
+          name: Nightly Build ${{ steps.version.outputs.build_datetime }}
+          body: |
+            ## Podman Nightly Build with ImageFS Plugin
+
+            **Build Date**: ${{ steps.version.outputs.build_datetime }} UTC
+            **Podman Version**: ${{ steps.version.outputs.podman_version }}
+            **Architecture**: linux/amd64
+
+            ### Configuration
+            - **Base**: podman-container-tools/podman (main branch)
+            - **Container-libs**: redhat-hpc/container-libs (imagefs-plugin-5.8 branch)
+
+            ### Files
+            - `podman-linux-amd64.tar.gz` - Podman binary (gzipped tar)
+            - `podman-linux-amd64.tar.gz.sha256` - SHA256 checksum
+          files: |
+            podman/release/podman-linux-amd64.tar.gz
+            podman/release/podman-linux-amd64.tar.gz.sha256
+          draft: false
+          prerelease: true
+
+      - name: Create build summary
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Release Tag**: ${{ steps.version.outputs.release_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Podman Version**: ${{ steps.version.outputs.podman_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build DateTime**: ${{ steps.version.outputs.build_datetime }} UTC" >> $GITHUB_STEP_SUMMARY
+          echo "- **Architecture**: linux/amd64" >> $GITHUB_STEP_SUMMARY
+          echo "- **Container-libs Branch**: imagefs-plugin-5.8" >> $GITHUB_STEP_SUMMARY
+          echo "- **Container-libs Repository**: redhat-hpc/container-libs" >> $GITHUB_STEP_SUMMARY

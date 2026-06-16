@@ -7,27 +7,49 @@ on:
   workflow_dispatch: # Allow manual trigger
 
 jobs:
-  build:
+  prepare:
     runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.version.outputs.release_tag }}
+      build_datetime: ${{ steps.version.outputs.build_datetime }}
+    steps:
+      - name: Generate version info
+        id: version
+        run: |
+          echo "build_datetime=$(date -u +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
+          echo "release_tag=nightly-$(date -u +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
+
+  build-matrix:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - rhel_version: "8"
+            container: "quay.io/centos/centos:stream8"
+          - rhel_version: "9"
+            container: "quay.io/centos/centos:stream9"
+          - rhel_version: "10"
+            container: "quay.io/centos/centos:stream10"
+    container:
+      image: ${{ matrix.container }}
     permissions:
       contents: write
 
     steps:
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.23'
-
       - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            libseccomp-dev \
-            libgpgme-dev \
-            libdevmapper-dev \
-            libbtrfs-dev \
-            pkg-config
+          dnf install -y \
+            git \
+            golang \
+            make \
+            gcc \
+            libseccomp-devel \
+            gpgme-devel \
+            device-mapper-devel \
+            btrfs-progs-devel \
+            pkg-config \
+            systemd-devel
 
       - name: Checkout Podman main
         uses: actions/checkout@v4
@@ -52,57 +74,62 @@ jobs:
         run: |
           make podman
 
-      - name: Get version info
-        id: version
+      - name: Get Podman version
+        id: podman_version
         working-directory: podman
         run: |
-          echo "podman_version=$(./bin/podman --version)" >> $GITHUB_OUTPUT
-          echo "build_date=$(date -u +%Y%m%d)" >> $GITHUB_OUTPUT
-          echo "build_datetime=$(date -u +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
-          echo "release_tag=nightly-$(date -u +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
+          echo "version=$(./bin/podman --version)" >> $GITHUB_OUTPUT
 
       - name: Package binary
         working-directory: podman
         run: |
           mkdir -p release
-          cp bin/podman release/podman-linux-amd64
-          chmod +x release/podman-linux-amd64
+          cp bin/podman release/podman-rhel${{ matrix.rhel_version }}-amd64
+          chmod +x release/podman-rhel${{ matrix.rhel_version }}-amd64
           cd release
-          tar -czf podman-linux-amd64.tar.gz podman-linux-amd64
-          sha256sum podman-linux-amd64.tar.gz > podman-linux-amd64.tar.gz.sha256
+          tar -czf podman-rhel${{ matrix.rhel_version }}-amd64.tar.gz podman-rhel${{ matrix.rhel_version }}-amd64
+          sha256sum podman-rhel${{ matrix.rhel_version }}-amd64.tar.gz > podman-rhel${{ matrix.rhel_version }}-amd64.tar.gz.sha256
 
-      - name: Create GitHub Release
+      - name: Upload binaries to release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.release_tag }}
-          name: Nightly Build ${{ steps.version.outputs.build_datetime }}
+          tag_name: ${{ needs.prepare.outputs.release_tag }}
+          name: Nightly Build ${{ needs.prepare.outputs.build_datetime }}
+          files: |
+            podman/release/podman-rhel${{ matrix.rhel_version }}-amd64.tar.gz
+            podman/release/podman-rhel${{ matrix.rhel_version }}-amd64.tar.gz.sha256
+          draft: false
+          prerelease: true
+
+  finalize-release:
+    needs: [prepare, build-matrix]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Update release description
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.release_tag }}
+          name: Nightly Build ${{ needs.prepare.outputs.build_datetime }}
           body: |
             ## Podman Nightly Build with ImageFS Plugin
 
-            **Build Date**: ${{ steps.version.outputs.build_datetime }} UTC
-            **Podman Version**: ${{ steps.version.outputs.podman_version }}
+            **Build Date**: ${{ needs.prepare.outputs.build_datetime }} UTC
             **Architecture**: linux/amd64
 
             ### Configuration
             - **Base**: podman-container-tools/podman (main branch)
             - **Container-libs**: redhat-hpc/container-libs (imagefs-plugin-5.8 branch)
 
-            ### Files
-            - `podman-linux-amd64.tar.gz` - Podman binary (gzipped tar)
-            - `podman-linux-amd64.tar.gz.sha256` - SHA256 checksum
-          files: |
-            podman/release/podman-linux-amd64.tar.gz
-            podman/release/podman-linux-amd64.tar.gz.sha256
+            ### Available Builds
+
+            | RHEL Version | Files |
+            |--------------|-------|
+            | RHEL 8 | `podman-rhel8-amd64.tar.gz` + `.sha256` |
+            | RHEL 9 | `podman-rhel9-amd64.tar.gz` + `.sha256` |
+            | RHEL 10 | `podman-rhel10-amd64.tar.gz` + `.sha256` |
+
+            Download the appropriate binary for your RHEL version.
           draft: false
           prerelease: true
-
-      - name: Create build summary
-        run: |
-          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Release Tag**: ${{ steps.version.outputs.release_tag }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Podman Version**: ${{ steps.version.outputs.podman_version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Build DateTime**: ${{ steps.version.outputs.build_datetime }} UTC" >> $GITHUB_STEP_SUMMARY
-          echo "- **Architecture**: linux/amd64" >> $GITHUB_STEP_SUMMARY
-          echo "- **Container-libs Branch**: imagefs-plugin-5.8" >> $GITHUB_STEP_SUMMARY
-          echo "- **Container-libs Repository**: redhat-hpc/container-libs" >> $GITHUB_STEP_SUMMARY

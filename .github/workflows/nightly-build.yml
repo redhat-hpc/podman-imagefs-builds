@@ -61,9 +61,22 @@ jobs:
       - name: Override container-libs with imagefs-plugin-5.8 branch
         working-directory: podman
         run: |
-          go mod edit -replace github.com/containers/storage=github.com/redhat-hpc/container-libs@imagefs-plugin-5.8
+          # Get the exact commit from the imagefs-plugin-5.8 branch
+          COMMIT=$(git ls-remote https://github.com/redhat-hpc/container-libs.git refs/heads/imagefs-plugin-5.8 | cut -f1)
+          echo "Using container-libs commit: $COMMIT"
+
+          # Add the replace directive with the specific commit
+          go mod edit -replace github.com/containers/storage=github.com/redhat-hpc/container-libs@$COMMIT
+
+          # Verify the replacement
+          grep "github.com/containers/storage =>" go.mod
+
           go mod tidy
           go mod vendor
+
+          # Verify the vendor directory has the replacement
+          echo "Checking vendor/modules.txt for replacement:"
+          grep -A 2 "github.com/containers/storage" vendor/modules.txt || true
 
       - name: Build Podman for linux/amd64
         working-directory: podman

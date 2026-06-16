@@ -41,6 +41,7 @@ jobs:
         run: |
           go mod edit -replace github.com/containers/storage=github.com/redhat-hpc/container-libs@imagefs-plugin-5.8
           go mod tidy
+          go mod vendor
 
       - name: Build Podman for linux/amd64
         working-directory: podman

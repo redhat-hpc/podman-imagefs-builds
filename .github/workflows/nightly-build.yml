@@ -23,16 +23,18 @@ jobs:
     needs: prepare
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
           - rhel_version: "8"
-            container: "quay.io/centos/centos:stream8"
+            container: "registry.access.redhat.com/ubi8/go-toolset"
           - rhel_version: "9"
-            container: "quay.io/centos/centos:stream9"
+            container: "registry.access.redhat.com/ubi9/go-toolset"
           - rhel_version: "10"
-            container: "quay.io/centos/centos:stream10"
+            container: "registry.access.redhat.com/ubi10/go-toolset"
     container:
       image: ${{ matrix.container }}
+      options: --user root
     permissions:
       contents: write
 
@@ -41,7 +43,6 @@ jobs:
         run: |
           dnf install -y \
             git \
-            golang \
             make \
             gcc \
             libseccomp-devel \
@@ -131,5 +132,7 @@ jobs:
             | RHEL 10 | `podman-rhel10-amd64.tar.gz` + `.sha256` |
 
             Download the appropriate binary for your RHEL version.
+
+            Built using Red Hat Universal Base Image (UBI) Go toolset containers.
           draft: false
           prerelease: true

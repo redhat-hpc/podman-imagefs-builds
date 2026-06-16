@@ -61,11 +61,11 @@ jobs:
       - name: Clone and replace container-libs with imagefs-plugin-5.8 branch
         working-directory: podman
         run: |
-          # Clone the custom container-libs fork
-          git clone --depth 1 --branch imagefs-plugin-5.8 https://github.com/redhat-hpc/container-libs.git /tmp/container-libs
+          # Clone the custom container-libs fork to a subdirectory
+          git clone --depth 1 --branch imagefs-plugin-5.8 https://github.com/redhat-hpc/container-libs.git ../container-libs
 
-          # Replace with local path
-          go mod edit -replace go.podman.io/storage=/tmp/container-libs
+          # Replace with local path (relative path)
+          go mod edit -replace go.podman.io/storage=../container-libs
 
           go mod tidy
           go mod vendor

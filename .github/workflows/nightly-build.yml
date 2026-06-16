@@ -48,7 +48,6 @@ jobs:
             libseccomp-devel \
             gpgme-devel \
             device-mapper-devel \
-            btrfs-progs-devel \
             pkg-config \
             systemd-devel
 
@@ -72,6 +71,7 @@ jobs:
           GOOS: linux
           GOARCH: amd64
           CGO_ENABLED: 1
+          BUILDTAGS: "exclude_graphdriver_btrfs"
         run: |
           make podman
 

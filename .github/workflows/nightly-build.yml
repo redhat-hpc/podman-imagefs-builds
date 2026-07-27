@@ -7,7 +7,52 @@ on:
   workflow_dispatch: # Allow manual trigger
 
 jobs:
+  check-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.compare.outputs.should_build }}
+      podman_sha: ${{ steps.fetch.outputs.podman_sha }}
+      container_libs_sha: ${{ steps.fetch.outputs.container_libs_sha }}
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v6
+
+      - name: Fetch current upstream SHAs
+        id: fetch
+        run: |
+          PODMAN_SHA=$(git ls-remote https://github.com/podman-container-tools/podman.git refs/heads/main | cut -f1)
+          CONTAINER_LIBS_SHA=$(git ls-remote https://github.com/redhat-hpc/container-libs.git refs/heads/imagefs-plugin | cut -f1)
+          echo "podman_sha=$PODMAN_SHA" >> $GITHUB_OUTPUT
+          echo "container_libs_sha=$CONTAINER_LIBS_SHA" >> $GITHUB_OUTPUT
+          echo "Podman SHA:        $PODMAN_SHA"
+          echo "Container-libs SHA: $CONTAINER_LIBS_SHA"
+
+      - name: Compare with last built SHAs
+        id: compare
+        run: |
+          LAST_PODMAN_SHA=""
+          LAST_CONTAINER_LIBS_SHA=""
+
+          if [ -f .last-built-shas ]; then
+            LAST_PODMAN_SHA=$(grep "^podman=" .last-built-shas | cut -d= -f2)
+            LAST_CONTAINER_LIBS_SHA=$(grep "^container_libs=" .last-built-shas | cut -d= -f2)
+          fi
+
+          echo "Last built podman SHA:        ${LAST_PODMAN_SHA:-<never built>}"
+          echo "Last built container-libs SHA: ${LAST_CONTAINER_LIBS_SHA:-<never built>}"
+
+          if [ "${{ steps.fetch.outputs.podman_sha }}" = "$LAST_PODMAN_SHA" ] && \
+             [ "${{ steps.fetch.outputs.container_libs_sha }}" = "$LAST_CONTAINER_LIBS_SHA" ]; then
+            echo "No changes detected in either repo. Skipping build."
+            echo "should_build=false" >> $GITHUB_OUTPUT
+          else
+            echo "Changes detected. Triggering build."
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          fi
+
   prepare:
+    needs: check-changes
+    if: needs.check-changes.outputs.should_build == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       release_tag: ${{ steps.version.outputs.release_tag }}
@@ -20,7 +65,8 @@ jobs:
           echo "release_tag=nightly-$(date -u +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
 
   build-matrix:
-    needs: prepare
+    needs: [check-changes, prepare]
+    if: needs.check-changes.outputs.should_build == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -56,14 +102,15 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: podman-container-tools/podman
-          ref: main
+          ref: ${{ needs.check-changes.outputs.podman_sha }}
           path: podman
 
       - name: Clone and replace container-libs with imagefs-plugin branch
         working-directory: podman
         run: |
-          # Clone the custom container-libs fork
+          # Clone the custom container-libs fork at the exact SHA detected
           git clone --depth 1 --branch imagefs-plugin https://github.com/redhat-hpc/container-libs.git /tmp/container-libs
+          git -C /tmp/container-libs checkout ${{ needs.check-changes.outputs.container_libs_sha }}
 
           # Replace with local path
           go mod edit -replace go.podman.io/storage=/tmp/container-libs/storage
@@ -109,11 +156,15 @@ jobs:
           prerelease: true
 
   finalize-release:
-    needs: [prepare, build-matrix]
+    needs: [check-changes, prepare, build-matrix]
+    if: needs.check-changes.outputs.should_build == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v6
+
       - name: Update release description
         uses: softprops/action-gh-release@v3
         with:
@@ -124,6 +175,10 @@ jobs:
 
             **Build Date**: ${{ needs.prepare.outputs.build_datetime }} UTC
             **Architecture**: linux/amd64
+
+            ### Source SHAs
+            - **podman-container-tools/podman**: `${{ needs.check-changes.outputs.podman_sha }}`
+            - **redhat-hpc/container-libs** (imagefs-plugin): `${{ needs.check-changes.outputs.container_libs_sha }}`
 
             ### Configuration
             - **Base**: podman-container-tools/podman (main branch)
@@ -142,3 +197,18 @@ jobs:
             Built using Red Hat Universal Base Image (UBI) Go toolset containers.
           draft: false
           prerelease: true
+
+      - name: Record successfully built SHAs
+        run: |
+          cat > .last-built-shas << EOF
+          podman=${{ needs.check-changes.outputs.podman_sha }}
+          container_libs=${{ needs.check-changes.outputs.container_libs_sha }}
+          EOF
+
+      - name: Commit updated SHAs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .last-built-shas
+          git commit -m "chore: record built SHAs [skip ci]" || echo "Nothing to commit"
+          git push
